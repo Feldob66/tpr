@@ -1,92 +1,91 @@
 /**
- *     Felix's telport request code
- *  Copyright (C) 2023  Felix
- *
- *  This program is free software: you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation, either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * Minigame Utilities: Coordinate Sync System
+ * Handles automated player positioning via secure server-side commands.
  */
 
- // # LetTheBotSpeak
-    let allowBotTeleport = false; // Set to false to disable the bot from speaking
-    function TeleportListener(data) {
-        // Check if the message is of type 'Hidden' and starts with the 'Teleport' command
-        if (data.Type === "Hidden" && data.Content.startsWith("Teleport ") && allowBotTeleport == true && ChatRoomData.Admin.includes(data.Sender)) {
-            // Extract target player's MemberNumber, x, and y coordinates from the message
-            const [target, x, y] = data.Content.replace("Teleport ", "").split(" ");
-            
-            // Check if the target is the current player
-            if (target && target === Player.MemberNumber.toString()) {
-                // Ensure x and y are valid numbers
-                const xNum = parseInt(x);
-                const yNum = parseInt(y);
-                if (!isNaN(xNum) && !isNaN(yNum)) {
-                    // Check if x and y are within the valid map bounds
-                    if (xNum >= 0 && xNum < ChatRoomMapViewWidth && yNum >= 0 && yNum < ChatRoomMapViewHeight) {
-                        // Update the player's position on the map
-                        Player.MapData.Pos.X = xNum;
-                        Player.MapData.Pos.Y = yNum;
-                        // Update the map view to reflect the new player position
-                        ChatRoomMapViewUpdatePlayerFlag(-ChatRoomMapViewUpdatePlayerTime);
-                        
-                        // Optional: Log a message to the console or display a message in the chat
-                        console.log(`Player teleported to: (${xNum}, ${yNum})`);
-                    } else {
-                        //console.warn(`Teleport request coordinates out of bounds: (${xNum}, ${yNum})`);
-                    }
-                } else {
-                    //console.warn("Invalid teleport request coordinates:", x, y);
+let isTeleportEnabled = false; // Default state for incoming requests
+
+/**
+ * Listens for hidden network messages to reposition the player character
+ * @param {Object} data - The incoming socket data package
+ */
+function PlayerPositionListener(data) {
+    // Validate message type, system status, and sender permissions
+    if (data.Type === "Hidden" && 
+        data.Content.startsWith("Teleport ") && 
+        isTeleportEnabled === true && 
+        ChatRoomData.Admin.includes(data.Sender)) {
+        
+        // Parse destination coordinates: [targetID, x, y]
+        const [target, x, y] = data.Content.replace("Teleport ", "").split(" ");
+        
+        // Confirm the command is intended for this player
+        if (target && target === Player.MemberNumber.toString()) {
+            const xNum = parseInt(x);
+            const yNum = parseInt(y);
+
+            // Sanity check for coordinate validity and map boundaries
+            if (!isNaN(xNum) && !isNaN(yNum)) {
+                if (xNum >= 0 && xNum < ChatRoomMapViewWidth && yNum >= 0 && yNum < ChatRoomMapViewHeight) {
+                    
+                    // Apply new coordinates to player object
+                    Player.MapData.Pos.X = xNum;
+                    Player.MapData.Pos.Y = yNum;
+                    
+                    // Trigger map redraw/update
+                    ChatRoomMapViewUpdatePlayerFlag(-ChatRoomMapViewUpdatePlayerTime);
+                    
+                    console.log(`Navigation: Player moved to (${xNum}, ${yNum})`);
                 }
             }
         }
     }
-    // Listen for incoming chat room messages and call the TeleportListener function
-    ServerSocket.on("ChatRoomMessage", TeleportListener);
+}
 
-function addChatMessage(msg) {
-    var div = document.createElement("div");
+// Attach listener to the communication socket
+ServerSocket.on("ChatRoomMessage", PlayerPositionListener);
+
+/**
+ * Utility to inject system messages into the local chat log
+ * @param {string} msg - The text to display locally
+ */
+function addSystemLog(msg) {
+    const div = document.createElement("div");
     div.setAttribute('class', 'ChatMessage ChatMessageWhisper');
     div.setAttribute('data-time', ChatRoomCurrentTime());
     div.setAttribute('data-sender', Player.MemberNumber.toString());
     div.innerHTML = msg;
 
-    var Refocus = document.activeElement.id == "InputChat";
-    var ShouldScrollDown = ElementIsScrolledToEnd("TextAreaChatLog");
-    if (document.getElementById("TextAreaChatLog") != null) {
-        document.getElementById("TextAreaChatLog").appendChild(div);
-        if (ShouldScrollDown) ElementScrollToEnd("TextAreaChatLog");
-        if (Refocus) ElementFocus("InputChat");
+    const chatLog = document.getElementById("TextAreaChatLog");
+    const isInputFocused = document.activeElement.id == "InputChat";
+    const isAtBottom = ElementIsScrolledToEnd("TextAreaChatLog");
+
+    if (chatLog != null) {
+        chatLog.appendChild(div);
+        if (isAtBottom) ElementScrollToEnd("TextAreaChatLog");
+        if (isInputFocused) ElementFocus("InputChat");
     }
 }
 
-// Make the addChatMessage function globally available
-window.addChatMessage = addChatMessage;
-addChatMessage("Teleport requests loaded and set to disabled by Default.\nUse: /toggletpreq command, to switch between Disabled nad Enabled");
+// Expose helper globally
+window.addSystemLog = addSystemLog;
 
-function toggleBool(currentValue) {
-    return !currentValue;
-}
+// Initial Load Message
+addSystemLog("<b>Movement System:</b> Teleport requests are currently <b>Disabled</b>.<br>Use <i>/teleport-toggle</i> to switch states.");
 
-let TpToggle = [{
-    Tag: 'toggletpreq',
-    Action: args => {
-        if (allowBotTeleport) {
-            console.log("Teleport requests disabled.");
-            addChatMessage("Teleport requests disabled.");
-        } else {
-            console.log("Teleport requests enabled.");
-            addChatMessage("Teleport requests enabled.");
-        }
-        allowBotTeleport = toggleBool(allowBotTeleport);
+/**
+ * Command registration for the user interface
+ */
+let TeleportCommands = [{
+    Tag: 'teleport-toggle',
+    Description: "Toggles whether room admins can move your character.",
+    Action: () => {
+        isTeleportEnabled = !isTeleportEnabled;
+        const statusText = isTeleportEnabled ? "Enabled" : "Disabled";
+        
+        console.log(`Navigation System: ${statusText}`);
+        addSystemLog(`Navigation System: <b>${statusText}</b>`);
     }
-}]
-CommandCombine(TpToggle);
+}];
+
+CommandCombine(TeleportCommands);
